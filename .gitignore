@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Data
+data/raw/
+data/bronze/
+data/silver/
+data/gold/
+
+# Power BI and temporary files
+*.pbix
+*.tmp
