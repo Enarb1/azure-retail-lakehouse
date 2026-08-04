@@ -44,3 +44,12 @@ CSV source files
 - Verified that the join preserved one row per order
 - Calculated order counts and late-delivery metrics by customer state
 - Saved the enriched orders dataset to Parquet
+- Inspected the Olist order-items dataset
+- Identified the grain as one row per item within an order
+- Verified the composite key of `order_id` and `order_item_id`
+- Defined an explicit schema using decimal types for monetary values
+- Calculated item totals from price and freight
+- Checked for order items without matching orders
+- Joined order items with enriched order and customer data
+- Verified that the join preserved one row per order item
+- Calculated order-level revenue summaries
