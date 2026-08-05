@@ -64,3 +64,15 @@ CSV source files
 - Verified that the join preserved one row per order item
 - Calculated product revenue, freight revenue, total revenue, item counts, and order counts by category
 - Calculated average item price by product category
+- Inspected the Olist payments dataset
+- Identified the grain as one row per payment sequence within an order
+- Verified the composite key of `order_id` and `payment_sequential`
+- Defined an explicit payment schema
+- Standardized payment-type values
+- Checked for negative payment values and invalid installment counts
+- Checked for payments without matching orders
+- Aggregated payment records to one row per order
+- Calculated payment-row counts, payment-method counts, and maximum installments
+- Compared payment totals with order-item totals
+- Investigated payment differences using a one-cent tolerance
+- Avoided row multiplication by aggregating order items and payments before joining
