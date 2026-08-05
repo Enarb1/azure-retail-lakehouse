@@ -53,3 +53,14 @@ CSV source files
 - Joined order items with enriched order and customer data
 - Verified that the join preserved one row per order item
 - Calculated order-level revenue summaries
+- Inspected the Olist products dataset
+- Verified `product_id` as the product-table primary key
+- Defined an explicit product schema
+- Standardized product category names
+- Replaced missing categories with `unknown`
+- Corrected misspelled source column names
+- Checked for order items without matching products
+- Joined products to the enriched order-items dataset
+- Verified that the join preserved one row per order item
+- Calculated product revenue, freight revenue, total revenue, item counts, and order counts by category
+- Calculated average item price by product category
