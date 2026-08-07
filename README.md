@@ -245,37 +245,6 @@ The analysis currently includes:
 - Latest order per customer
 - Product revenue ranking within category
 
-## Key engineering lessons
-
-### Define the grain before joining
-
-Each dataset has a specific row-level meaning. Understanding the grain helps prevent duplicate records and incorrect aggregations.
-
-### One-to-many joins can multiply rows
-
-Order items and payments can both contain multiple rows for the same order. Joining them directly on `order_id` can multiply records.
-
-The project avoids this by aggregating order items and payments to one row per order before joining the summaries.
-
-### Bronze and Silver have different responsibilities
-
-The Bronze layer preserves source data with minimal transformation.
-
-The Silver layer validates, parses, standardizes, deduplicates, and separates invalid records before producing trusted datasets.
-
-### Validate both inputs and outputs
-
-Bronze validation identifies problems in source records.
-
-Silver validation confirms that cleaned outputs have the expected schema, row count, grain, and keys.
-
-### Left-anti joins help find broken relationships
-
-Left-anti joins are used to find records without matching parent records, such as payments without matching orders or order items without matching products.
-
-### Parquet outputs are directories
-
-Spark writes Parquet datasets as directories containing one or more part files rather than as a single file.
 
 ## Running the project
 
@@ -296,3 +265,52 @@ Spark writes Parquet datasets as directories containing one or more part files r
 ```
 
 The raw, Bronze, and Silver data directories are excluded from Git because they contain source or generated data files.
+
+### Spark Execution & Partitioning
+
+Started investigating how Spark executes the PySpark transformations built during Weeks 1 and 2.
+
+#### Spark execution plans
+- Used `explain("formatted")` to inspect physical execution plans
+- Identified narrow transformations such as `filter` and `select`
+- Confirmed that simple filtering and projection did not require a shuffle
+- Observed Parquet predicate pushdown for `price > 100`
+- Observed column pruning, where Spark read only the columns required by the query
+
+#### Shuffles and wide transformations
+- Inspected `groupBy` execution plans and identified `Exchange` nodes
+- Observed hash partitioning during category-level aggregations
+- Compared a simple `sum` aggregation with `countDistinct`
+- Observed that `countDistinct(order_id)` required an additional redistribution step
+- Inspected global sorting with `orderBy`
+- Observed range partitioning before the final sort
+
+#### Join execution
+- Inspected the `order_items` → `products` join execution plan
+- Observed Spark selecting a `BroadcastHashJoin`
+- Confirmed that the smaller `products` dataset was used as the broadcast/build side (`BuildRight`)
+- Learned how broadcasting can avoid repartitioning both sides of a join
+
+#### Partitions
+- Inspected DataFrame partition counts
+- Compared `repartition()` and `coalesce()`
+- Confirmed that `repartition(4)` introduced an `Exchange` using round-robin partitioning
+- Confirmed that `repartition(4, "product_id")` introduced an `Exchange` using hash partitioning
+- Confirmed that `coalesce()` can reduce partitions without introducing another full shuffle
+- Compared `coalesce(1)` with `repartition(1)` directly
+- Verified the local Spark shuffle partition configuration:
+
+  `spark.sql.shuffle.partitions = 200`
+
+#### Adaptive Query Execution
+- Observed `AdaptiveSparkPlan` in Spark physical plans
+- Learned the difference between `isFinalPlan=false` and a finalized adaptive execution plan
+- Investigated how runtime execution information can affect the final physical plan
+
+#### Key takeaways
+- An `Exchange` node is a strong indicator that Spark is redistributing data between partitions
+- `groupBy`, global sorting, and repartitioning can introduce shuffles
+- `repartition()` intentionally redistributes data, while `coalesce()` is useful mainly for reducing partitions without a full reshuffle
+- A shorter physical plan is not necessarily a cheaper execution plan
+- Spark can optimize Parquet reads using predicate pushdown and column pruning
+- Broadcast joins can be efficient when one side of a join is sufficiently small

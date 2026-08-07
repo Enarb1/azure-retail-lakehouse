@@ -20,3 +20,4 @@ ORDER_ITEMS_SILVER_PATH = SILVER_DIR / "order_items"
 PAYMENTS_SILVER_PATH = SILVER_DIR / "payments"
 
 ORDERS_ENRICHED_PATH = SILVER_DIR / "orders_enriched"
+ORDER_ITEMS_WITH_PRODUCTS_PATH = SILVER_DIR / "order_items_with_products"
