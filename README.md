@@ -4,26 +4,42 @@ A six-week junior data engineering preparation project using the Olist Brazilian
 
 The project currently demonstrates local PySpark development, Bronze ingestion, Silver data cleaning, data-quality validation, joins, aggregations, window functions, Parquet storage, and sales analysis.
 
-## Project architecture
+## Current Architecture
+
+The project currently runs PySpark code from PyCharm using Databricks Connect and Databricks serverless compute.
 
 ```text
-CSV source files
+Local Olist CSV files
         ↓
-Bronze raw layer
+Databricks CLI upload
         ↓
-Silver cleaned layer
+Unity Catalog Volume
+workspace.bronze.raw_files
         ↓
-Integrated sales analysis
+Databricks serverless compute
+        ↓
+PySpark / Databricks Connect
+        ↓
+Managed Delta Bronze tables
+        ↓
+Silver Delta tables
+        ↓
+Gold model
 ```
 
 ## Technologies used
 
-- Python
-- PySpark
-- Jupyter Notebook
+- Python 3.12
+- PySpark DataFrame API
+- Databricks Connect
+- Databricks serverless compute
+- Databricks CLI
+- Unity Catalog
+- Delta Lake
 - Parquet
-- Git
-- GitHub
+- PyCharm
+- Jupyter notebooks
+- Git / GitHub
 
 ## Dataset
 
@@ -40,26 +56,34 @@ The source entities currently included are:
 ## Project structure
 
 ```text
-azure-retail-lakehouse/
+azure_retail_lakehouse/
+├── architecture/
 ├── data/
-│   ├── raw/
-│   ├── bronze/
-│   └── silver/
+│   └── raw/
+│       └── olist/
 ├── docs/
-│   └── sql_to_pyspark.md
+│   ├── sql_to_pyspark.md
+│   ├── week_1_2_pyspark_notes.md
+│   ├── spark_execution_notes.md
+│   └── week3_databricks_delta_notes.md
 ├── notebooks/
 │   ├── 00_pyspark_basics.ipynb
 │   ├── 01_bronze_ingestion.ipynb
 │   ├── 02_silver_orders.ipynb
 │   ├── 03_silver_customers.ipynb
-│   ├── 04_silver_products.ipynb
-│   ├── 05_silver_order_items.ipynb
+│   ├── 04_silver_order_items.ipynb
+│   ├── 05_silver_products.ipynb
 │   ├── 06_silver_payments.ipynb
-│   └── 07_sales_analysis.ipynb
+│   ├── 07_sales_analysis.ipynb
+│   ├── 08_spark_execution.ipynb
+│   └── 09_delta_bronze.ipynb
+├── powerbi/
+├── sql/
 ├── src/
-│   ├── __init__.py
 │   ├── config.py
+│   ├── schemas.py
 │   └── spark_session.py
+├── tests/
 ├── .gitignore
 └── README.md
 ```
@@ -245,72 +269,51 @@ The analysis currently includes:
 - Latest order per customer
 - Product revenue ranking within category
 
+### Week 2 — Spark Execution 
 
-## Running the project
+- Used `explain("formatted")` to inspect Spark physical plans
+- Identified narrow and wide transformations
+- Identified `Exchange` nodes and shuffle boundaries
+- Observed predicate pushdown and column pruning on Parquet reads
+- Compared simple aggregation with `countDistinct`
+- Observed hash partitioning during aggregations
+- Observed range partitioning during global sorting
+- Inspected a `BroadcastHashJoin`
+- Compared `repartition()` with `coalesce()`
+- Compared round-robin and hash repartitioning
+- Investigated partition sizing and data skew
+- Reviewed driver and executor responsibilities
+- Learned why `collect()` is dangerous on large datasets
+- Practiced caching and persistence concepts
+- Compared Spark built-in functions with Python UDFs
+- Reviewed Adaptive Query Execution and `isFinalPlan`
 
-1. Create and activate a Python virtual environment.
-2. Install PySpark and the required dependencies.
-3. Place the Olist CSV source files in the configured raw-data directory.
-4. Run the notebooks in order:
+### Week 2 — Databricks + Delta Lake
 
-```text
-00_pyspark_basics.ipynb
-01_bronze_ingestion.ipynb
-02_silver_orders.ipynb
-03_silver_customers.ipynb
-04_silver_products.ipynb
-05_silver_order_items.ipynb
-06_silver_payments.ipynb
-07_sales_analysis.ipynb
-```
+- Switched the project environment to Python 3.12
+- Configured Databricks Connect
+- Connected PyCharm to Databricks serverless compute
+- Configured Databricks CLI authentication
+- Created the `workspace.bronze` Unity Catalog schema
+- Created the `workspace.bronze.raw_files` managed Volume
+- Uploaded the raw Olist orders CSV to the Volume
+- Refactored reusable Spark schemas into `src/schemas.py`
+- Read the raw orders dataset with an explicit schema
+- Added source and ingestion metadata
+- Created the first managed Bronze Delta table:
+  - `workspace.bronze.orders`
+- Verified the Delta table using `DESCRIBE DETAIL`
+- Inspected Delta transaction history with `DESCRIBE HISTORY`
+- Demonstrated Delta table versioning
+- Demonstrated time travel with `VERSION AS OF`
+- Demonstrated schema enforcement with an intentionally invalid append
+- Performed explicit schema evolution using `ALTER TABLE ADD COLUMNS`
+- Compared append and overwrite behaviour
+- Demonstrated a Delta `MERGE` upsert
+- Verified inserted and updated row metrics in Delta history
+- Observed deletion-vector usage during `MERGE`
+- Observed an automatic `OPTIMIZE` operation
+- Confirmed predictive optimization was inherited from the Unity Catalog metastore
+
 
 The raw, Bronze, and Silver data directories are excluded from Git because they contain source or generated data files.
-
-### Spark Execution & Partitioning
-
-Started investigating how Spark executes the PySpark transformations built during Weeks 1 and 2.
-
-#### Spark execution plans
-- Used `explain("formatted")` to inspect physical execution plans
-- Identified narrow transformations such as `filter` and `select`
-- Confirmed that simple filtering and projection did not require a shuffle
-- Observed Parquet predicate pushdown for `price > 100`
-- Observed column pruning, where Spark read only the columns required by the query
-
-#### Shuffles and wide transformations
-- Inspected `groupBy` execution plans and identified `Exchange` nodes
-- Observed hash partitioning during category-level aggregations
-- Compared a simple `sum` aggregation with `countDistinct`
-- Observed that `countDistinct(order_id)` required an additional redistribution step
-- Inspected global sorting with `orderBy`
-- Observed range partitioning before the final sort
-
-#### Join execution
-- Inspected the `order_items` → `products` join execution plan
-- Observed Spark selecting a `BroadcastHashJoin`
-- Confirmed that the smaller `products` dataset was used as the broadcast/build side (`BuildRight`)
-- Learned how broadcasting can avoid repartitioning both sides of a join
-
-#### Partitions
-- Inspected DataFrame partition counts
-- Compared `repartition()` and `coalesce()`
-- Confirmed that `repartition(4)` introduced an `Exchange` using round-robin partitioning
-- Confirmed that `repartition(4, "product_id")` introduced an `Exchange` using hash partitioning
-- Confirmed that `coalesce()` can reduce partitions without introducing another full shuffle
-- Compared `coalesce(1)` with `repartition(1)` directly
-- Verified the local Spark shuffle partition configuration:
-
-  `spark.sql.shuffle.partitions = 200`
-
-#### Adaptive Query Execution
-- Observed `AdaptiveSparkPlan` in Spark physical plans
-- Learned the difference between `isFinalPlan=false` and a finalized adaptive execution plan
-- Investigated how runtime execution information can affect the final physical plan
-
-#### Key takeaways
-- An `Exchange` node is a strong indicator that Spark is redistributing data between partitions
-- `groupBy`, global sorting, and repartitioning can introduce shuffles
-- `repartition()` intentionally redistributes data, while `coalesce()` is useful mainly for reducing partitions without a full reshuffle
-- A shorter physical plan is not necessarily a cheaper execution plan
-- Spark can optimize Parquet reads using predicate pushdown and column pruning
-- Broadcast joins can be efficient when one side of a join is sufficiently small
