@@ -521,5 +521,3 @@ The project now has:
 - Gold model and data-dictionary documentation
 
 Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository.
-
-````
