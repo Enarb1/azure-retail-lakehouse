@@ -2,7 +2,7 @@
 
 A six-week junior data engineering preparation project using the Olist Brazilian e-commerce dataset.
 
-The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze and Silver Delta Lake pipelines, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, joins, aggregations, window functions, Parquet storage, and sales analysis.
+The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, joins, aggregations, window functions, Parquet storage, and sales analysis.
 
 ## Current Architecture
 
@@ -24,7 +24,8 @@ Managed Delta Bronze tables
         ↓
 Silver Delta tables
         ↓
-Gold model
+Gold Delta star schema
+(dim_customer / dim_product / dim_date / fact_order_item)
 ```
 
 
@@ -71,7 +72,8 @@ azure_retail_lakehouse/
 │   ├── spark_execution_notes.md
 │   ├── databricks_delta_notes.md
 │   ├── spark_shuffles_note.md
-│   └── silver_layer_delta_history_databricks_jobs.md
+│   ├── silver_layer_delta_history_databricks_jobs.md
+│   └── gold_data_dictionary.md
 ├── notebooks/
 │   ├── 00_pyspark_basics.ipynb
 │   ├── 01_bronze_ingestion.ipynb
@@ -83,7 +85,8 @@ azure_retail_lakehouse/
 │   ├── 07_sales_analysis.ipynb
 │   ├── 08_spark_execution.ipynb
 │   ├── 09_delta_bronze.ipynb
-│   └── 10_delta_silver.ipynb
+│   ├── 10_delta_silver.ipynb
+│   └── 11_gold_dimensions.ipynb
 ├── powerbi/
 ├── sql/
 ├── src/
@@ -141,6 +144,10 @@ Uploads and reads the five Olist source datasets from a Unity Catalog Volume, ap
 ### `10_delta_silver.ipynb`
 
 Reads the managed Bronze Delta tables, applies cleaning and data-quality rules, validates keys and referential integrity, writes cleaned Silver Delta tables and rejected-record tables, and records rejection reasons. The notebook is parameterized with `dbutils.widgets` and can run as a Databricks Job using a `catalog` task parameter.
+
+### `11_gold_dimensions.ipynb`
+
+Builds the Gold dimensional model from validated Silver Delta tables. It creates `dim_customer`, `dim_product`, `dim_date`, and `fact_order_item`; uses deterministic surrogate keys and unknown/default dimension members; validates fact grain and dimension joins; demonstrates incremental fact loading with a watermark and Delta `MERGE`; verifies idempotent reruns; and includes Type 1 and Type 2 Slowly Changing Dimension examples.
 
 ## Current progress
 
@@ -218,11 +225,15 @@ Reads the managed Bronze Delta tables, applies cleaning and data-quality rules, 
 
 | Dataset | Grain | Key |
 |---|---|---|
-| Orders | One row per order | `order_id` |
-| Customers | One row per customer record | `customer_id` |
-| Products | One row per product | `product_id` |
-| Order items | One row per item within an order | `order_id`, `order_item_id` |
-| Payments | One row per payment sequence within an order | `order_id`, `payment_sequential` |
+| Silver Orders | One row per order | `order_id` |
+| Silver Customers | One row per customer record | `customer_id` |
+| Silver Products | One row per product | `product_id` |
+| Silver Order items | One row per item within an order | `order_id`, `order_item_id` |
+| Silver Payments | One row per payment sequence within an order | `order_id`, `payment_sequential` |
+| Gold `dim_customer` | One row per logical customer, plus unknown member | `customer_key` / `customer_unique_id` |
+| Gold `dim_product` | One row per product, plus unknown member | `product_key` / `product_id` |
+| Gold `dim_date` | One row per calendar date | `date_key` |
+| Gold `fact_order_item` | One row per product line within one order | `order_id`, `order_item_id` |
 
 The `customer_unique_id` column represents a logical customer who may be associated with multiple customer records.
 
@@ -243,6 +254,13 @@ The `customer_unique_id` column represents a logical customer who may be associa
 | Silver rejected | Orders |
 | Silver rejected | Order items |
 | Silver rejected | Payments |
+| Gold | `dim_customer` |
+| Gold | `dim_product` |
+| Gold | `dim_date` |
+| Gold | `fact_order_item` |
+| Gold demo | Incremental fact `MERGE` |
+| Gold demo | Product Type 1 SCD |
+| Gold demo | Customer Type 2 SCD |
 | Integrated analysis | Orders enriched with customer information |
 | Integrated analysis | Order items enriched with order, customer, and product information |
 | Integrated analysis | Order-level revenue summary |
@@ -265,6 +283,32 @@ Current rejection reasons:
 - `rejected_order_items`: `parent_order_rejected` — 8 rows
 - `rejected_payments`: `parent_order_rejected` — 8 rows
 
+
+## Current Gold Delta checkpoint
+
+| Table | Rows |
+|---|---:|
+| `workspace.gold.dim_customer` | 96,097 |
+| `workspace.gold.dim_product` | 32,952 |
+| `workspace.gold.dim_date` | 774 |
+| `workspace.gold.fact_order_item` | 112,642 |
+
+Gold model decisions and validation:
+
+- `dim_customer` is built at one row per logical `customer_unique_id`, plus an unknown/default member.
+- `dim_product` is built at one row per `product_id`, plus an unknown/default member.
+- `dim_date` covers the valid order-date range from `2016-09-04` through `2018-10-17`.
+- `fact_order_item` grain is one product line within one order.
+- Deterministic `xxhash64()` surrogate keys are used for customer and product dimensions.
+- Surrogate key `0` is reserved for unknown/default customer and product members.
+- Duplicate customer surrogate keys: 0.
+- Duplicate product surrogate keys: 0.
+- Duplicate date keys: 0.
+- Duplicate fact grain keys: 0.
+- Facts using unknown customer key: 0.
+- Facts using unknown product key: 0.
+- Facts with missing date key: 0.
+
 ## Data-quality checks
 
 The project currently includes checks for:
@@ -284,6 +328,12 @@ The project currently includes checks for:
 - Unexpected row-count changes after joins
 - Payment totals that differ from order-item totals
 - Parent-order rejection propagation to dependent order-item and payment records
+- Duplicate Gold surrogate keys
+- Duplicate Gold fact-grain keys
+- Null Gold foreign keys
+- Negative Gold fact measures
+- Incremental-load duplicate detection
+- Type 2 current-row and effective-date validation
 
 ## Business metrics
 
@@ -385,9 +435,72 @@ The analysis currently includes:
 - Successfully executed the parameterized Silver pipeline as a Databricks Job
 
 
+
+### Week 3 — Gold dimensional modelling and incremental processing (ahead of schedule)
+
+Although these topics appear later in the six-week guide, they were completed during the project's actual Week 3.
+
+- Created the `workspace.gold` Unity Catalog schema
+- Profiled the relationship between `customer_id` and `customer_unique_id`
+- Confirmed 2,997 logical customers have multiple `customer_id` values
+- Identified logical customers with changing locations:
+  - 122 with multiple cities
+  - 39 with multiple states
+- Used order timestamps to identify the latest observed customer record
+- Built `workspace.gold.dim_customer`
+  - grain: one row per `customer_unique_id`
+  - 96,096 real logical customers
+  - 1 unknown/default member
+  - 96,097 total rows
+- Built `workspace.gold.dim_product`
+  - grain: one row per `product_id`
+  - 32,951 real products
+  - 1 unknown/default member
+  - 32,952 total rows
+- Generated `workspace.gold.dim_date`
+  - date range: `2016-09-04` to `2018-10-17`
+  - 774 calendar rows
+- Built `workspace.gold.fact_order_item`
+  - grain: one product line within one order
+  - natural fact key: (`order_id`, `order_item_id`)
+  - 112,642 rows
+- Joined Gold facts to customer, product, and date dimensions without changing the fact grain
+- Verified 0 unknown customer keys, 0 unknown product keys, and 0 missing date keys in the current fact data
+- Validated Gold fact measures:
+  - 0 negative prices
+  - 0 negative freight values
+  - 0 negative item totals
+- Demonstrated a controlled incremental fact load using `order_purchase_timestamp` as a watermark
+- Used `2018-01-01` as the demo watermark:
+  - initial batch: 51,232 rows
+  - incremental batch: 61,410 rows
+- Loaded the incremental batch with Delta `MERGE`
+- Verified the incremental target reached 112,642 rows
+- Reran the same incremental batch and confirmed the row count remained 112,642
+- Verified 0 duplicate fact keys after the rerun
+- Compared full-load and incremental outputs with `exceptAll()` and confirmed both differences were 0
+- Inspected Delta history and observed:
+  - first `MERGE`: 61,410 inserts
+  - rerun: 61,410 matched updates and 0 inserts
+- Demonstrated SCD Type 1 on a product dimension copy
+  - changed one product category from `perfumaria` to `fragrances`
+  - preserved the same `product_key`
+  - did not preserve the previous attribute value
+- Demonstrated SCD Type 2 on a customer with a location change
+  - created two historical rows for the same `customer_unique_id`
+  - generated different surrogate keys per historical version
+  - added `effective_from`, `effective_to`, and `is_current`
+  - validated exactly one current row
+  - validated 0 invalid effective-date ranges
+- Reviewed late-arriving fact/dimension handling using unknown key `0`
+- Created `docs/gold_data_dictionary.md`
+- Documented Gold grains, keys, measures, unknown-member strategy, incremental loading, idempotency, and SCD demonstrations
+
 ## Current status
 
-Week 2 is complete. The project now has:
+The project is currently in **actual Week 3**, but progress is ahead of the six-week guide and has already covered the guide's Gold/incremental-processing objectives.
+
+The project now has:
 
 - managed Bronze Delta tables with source metadata
 - cleaned Silver Delta tables
@@ -396,7 +509,17 @@ Week 2 is complete. The project now has:
 - Delta history and time-travel demonstrations
 - a parameterized Silver notebook
 - a successful Databricks Job / Workflow run
+- a persisted Gold star schema
+- deterministic customer and product surrogate keys
+- unknown/default dimension members
+- a generated date dimension
+- a validated order-item fact table
+- an incremental Delta `MERGE` demonstration
+- an idempotent rerun test with no duplicate facts
+- a Type 1 product-dimension demonstration
+- a Type 2 customer-history demonstration
+- Gold model and data-dictionary documentation
 
-The next project phase is **Week 3 — incremental processing and Gold dimensional modelling**, including dimensions, the order-item fact table, surrogate keys, incremental filtering, Delta `MERGE`, Type 1 and Type 2 changes, and idempotent reruns.
+Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository.
 
-The raw, Bronze, and Silver data directories are excluded from Git because they contain source or generated data files.
+````
