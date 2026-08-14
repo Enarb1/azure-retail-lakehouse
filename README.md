@@ -2,7 +2,7 @@
 
 A six-week junior data engineering preparation project using the Olist Brazilian e-commerce dataset.
 
-The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, joins, aggregations, window functions, Parquet storage, and sales analysis.
+The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, reusable Gold validation checks, workflow quality gates, joins, aggregations, window functions, Parquet storage, and sales analysis.
 
 ## Current Architecture
 
@@ -29,7 +29,17 @@ Gold Delta star schema
 ```
 
 
-The Silver pipeline is also imported into the Databricks Workspace and can run as a parameterized Databricks Job, while local development continues in PyCharm through Databricks Connect.
+The Databricks workflow is imported into the Databricks Workspace and runs as a three-task parameterized Job while local development continues in PyCharm through Databricks Connect:
+
+```text
+silver_pipeline
+      ↓
+gold_dimensions
+      ↓
+gold_validation
+```
+
+The final validation task acts as a quality gate: if a Gold validation rule fails, the notebook raises an exception and the workflow is marked as failed.
 
 ## Technologies used
 
@@ -86,7 +96,8 @@ azure_retail_lakehouse/
 │   ├── 08_spark_execution.ipynb
 │   ├── 09_delta_bronze.ipynb
 │   ├── 10_delta_silver.ipynb
-│   └── 11_gold_dimensions.ipynb
+│   ├── 11_gold_dimensions.ipynb
+│   └── 12_gold_validation.ipynb
 ├── powerbi/
 ├── sql/
 ├── src/
@@ -148,6 +159,10 @@ Reads the managed Bronze Delta tables, applies cleaning and data-quality rules, 
 ### `11_gold_dimensions.ipynb`
 
 Builds the Gold dimensional model from validated Silver Delta tables. It creates `dim_customer`, `dim_product`, `dim_date`, and `fact_order_item`; uses deterministic surrogate keys and unknown/default dimension members; validates fact grain and dimension joins; demonstrates incremental fact loading with a watermark and Delta `MERGE`; verifies idempotent reruns; and includes Type 1 and Type 2 Slowly Changing Dimension examples.
+
+### `12_gold_validation.ipynb`
+
+Provides a reusable Gold-layer quality gate. It validates dimension-key uniqueness, fact-grain uniqueness, fact-to-dimension referential integrity, null foreign keys, invalid measures, and required unknown/default dimension members. It produces a PASS/FAIL validation summary and raises an exception when any check fails, allowing Databricks Workflows to stop on bad Gold data.
 
 ## Current progress
 
@@ -309,6 +324,38 @@ Gold model decisions and validation:
 - Facts using unknown product key: 0.
 - Facts with missing date key: 0.
 
+## Gold validation quality gate
+
+`12_gold_validation.ipynb` runs reusable checks against the four core Gold tables.
+
+Current validation results:
+
+| Check | Result |
+|---|---|
+| Duplicate customer keys | PASS |
+| Duplicate product keys | PASS |
+| Duplicate date keys | PASS |
+| Duplicate fact keys | PASS |
+| Missing customer dimension keys | PASS |
+| Missing product dimension keys | PASS |
+| Missing date dimension keys | PASS |
+| Null customer foreign keys | PASS |
+| Null product foreign keys | PASS |
+| Null date foreign keys | PASS |
+| Negative price | PASS |
+| Negative freight | PASS |
+| Negative item total | PASS |
+| Exactly one unknown customer member | PASS |
+| Exactly one unknown product member | PASS |
+
+Current result:
+
+```text
+Gold validation passed: all checks succeeded.
+```
+
+The notebook raises an exception when any validation result is `FAIL`, so it can be used as a workflow quality gate rather than only as a reporting notebook.
+
 ## Data-quality checks
 
 The project currently includes checks for:
@@ -334,6 +381,8 @@ The project currently includes checks for:
 - Negative Gold fact measures
 - Incremental-load duplicate detection
 - Type 2 current-row and effective-date validation
+- Automated PASS/FAIL Gold validation summary
+- Workflow failure when a Gold validation check fails
 
 ## Business metrics
 
@@ -495,6 +544,18 @@ Although these topics appear later in the six-week guide, they were completed du
 - Reviewed late-arriving fact/dimension handling using unknown key `0`
 - Created `docs/gold_data_dictionary.md`
 - Documented Gold grains, keys, measures, unknown-member strategy, incremental loading, idempotency, and SCD demonstrations
+- Created `12_gold_validation.ipynb` as a reusable Gold validation notebook
+- Added 15 PASS/FAIL validation checks covering keys, referential integrity, null foreign keys, invalid measures, and unknown/default members
+- Added an automatic failure condition that raises an exception if any Gold validation check fails
+- Imported `11_gold_dimensions.ipynb` and `12_gold_validation.ipynb` into the Databricks Workspace
+- Expanded the Databricks Job into a three-task workflow:
+  - `silver_pipeline`
+  - `gold_dimensions`
+  - `gold_validation`
+- Configured task dependencies so Gold runs only after Silver succeeds and validation runs only after Gold succeeds
+- Passed the `catalog=workspace` parameter through the workflow tasks
+- Executed the complete three-task Databricks Job successfully
+- Confirmed the final workflow output reported `Gold validation passed: all checks succeeded.`
 
 ## Current status
 
@@ -519,5 +580,11 @@ The project now has:
 - a Type 1 product-dimension demonstration
 - a Type 2 customer-history demonstration
 - Gold model and data-dictionary documentation
+- a reusable Gold validation notebook with 15 PASS/FAIL checks
+- an automated Gold quality gate that fails the workflow on validation errors
+- a three-task Databricks Workflow: `silver_pipeline → gold_dimensions → gold_validation`
+- a successful end-to-end workflow run with all Gold validation checks passing
+
+The project is still in **actual Week 3**, but the implementation is ahead of the six-week study guide and has already completed the guide's Gold dimensional-modelling, incremental-processing, SCD, idempotency, and automated validation objectives.
 
 Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository.
