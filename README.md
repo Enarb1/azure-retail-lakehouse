@@ -2,19 +2,30 @@
 
 A six-week junior data engineering preparation project using the Olist Brazilian e-commerce dataset.
 
-The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, reusable Gold validation checks, workflow quality gates, joins, aggregations, window functions, Parquet storage, and sales analysis.
+The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, Azure Data Factory orchestration, Azure Data Lake Storage Gen2 ingestion, metadata-driven Lookup/ForEach processing, parameterized ADF datasets, managed-identity authentication with Azure RBAC, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, reusable Gold validation checks, workflow quality gates, joins, aggregations, window functions, Parquet storage, and sales analysis.
 
 ## Current Architecture
 
-The project currently runs PySpark code from PyCharm using Databricks Connect and Databricks serverless compute.
+The project currently has two complementary execution paths:
+
+1. local/Databricks development through PyCharm + Databricks Connect;
+2. Azure ingestion through Azure Data Factory + ADLS Gen2.
 
 ```text
 Local Olist CSV files
         ↓
-Databricks CLI upload
+ADLS Gen2 landing container
         ↓
-Unity Catalog Volume
-workspace.bronze.raw_files
+Azure Data Factory
+Lookup metadata → ForEach entity → Copy Activity
+        ↓
+ADLS Gen2 raw container
+```
+
+The Databricks transformation path remains:
+
+```text
+Unity Catalog Volume / Bronze source
         ↓
 Databricks serverless compute
         ↓
@@ -28,7 +39,6 @@ Gold Delta star schema
 (dim_customer / dim_product / dim_date / fact_order_item)
 ```
 
-
 The Databricks workflow is imported into the Databricks Workspace and runs as a three-task parameterized Job while local development continues in PyCharm through Databricks Connect:
 
 ```text
@@ -41,6 +51,18 @@ gold_validation
 
 The final validation task acts as a quality gate: if a Gold validation rule fails, the notebook raises an exception and the workflow is marked as failed.
 
+The current ADF ingestion pipeline is:
+
+```text
+lookup_entities
+      ↓
+foreach_entity
+      ↓
+copy_entity_to_raw
+```
+
+`lookup_entities` reads `entities.json`, `foreach_entity` iterates over the five Olist entities, and one parameterized Copy activity moves each file from the ADLS `landing` container into the `raw` container.
+
 ## Technologies used
 
 - Python 3.12
@@ -49,6 +71,9 @@ The final validation task acts as a quality gate: if a Gold validation rule fail
 - Databricks serverless compute
 - Databricks CLI
 - Databricks Jobs / Workflows
+- Azure Data Factory
+- Azure Data Lake Storage Gen2
+- Azure Managed Identity / RBAC
 - Unity Catalog
 - Delta Lake
 - Parquet
@@ -83,7 +108,10 @@ azure_retail_lakehouse/
 │   ├── databricks_delta_notes.md
 │   ├── spark_shuffles_note.md
 │   ├── silver_layer_delta_history_databricks_jobs.md
-│   └── gold_data_dictionary.md
+│   ├── gold_data_dictionary.md
+│   └── azure_adf_learning_notes_2026-08-25.md
+├── config/
+│   └── adf_entities.json
 ├── notebooks/
 │   ├── 00_pyspark_basics.ipynb
 │   ├── 01_bronze_ingestion.ipynb
@@ -557,9 +585,172 @@ Although these topics appear later in the six-week guide, they were completed du
 - Executed the complete three-task Databricks Job successfully
 - Confirmed the final workflow output reported `Gold validation passed: all checks succeeded.`
 
+
+## Azure Data Factory + ADLS Gen2 integration
+
+The project now includes a working metadata-driven Azure ingestion layer.
+
+### Azure resources
+
+- Azure for Students subscription
+- `$10` Azure budget with alerts
+- Resource group: `rg-azure-retail-lakehouse`
+- ADLS Gen2 Storage Account
+- Azure Data Factory: `branimir01`
+- Deployment region: `Germany West Central`
+
+The subscription is governed by an Azure Policy that restricts resource creation to approved regions. The project therefore uses `Germany West Central` rather than `West Europe`.
+
+### ADLS Gen2 layout
+
+```text
+landing/
+├── olist_orders_dataset.csv
+├── olist_customers_dataset.csv
+├── olist_order_items_dataset.csv
+├── olist_products_dataset.csv
+└── olist_order_payments_dataset.csv
+
+raw/
+├── metadata/
+│   └── entities.json
+├── olist_orders_dataset.csv
+├── olist_customers_dataset.csv
+├── olist_order_items_dataset.csv
+├── olist_products_dataset.csv
+└── olist_order_payments_dataset.csv
+```
+
+The `landing` area represents files as delivered by the source. The `raw` area represents files successfully ingested by ADF.
+
+### ADF linked service and security
+
+Created:
+
+```text
+ls_adls_retail
+```
+
+Authentication uses:
+
+```text
+System Assigned Managed Identity
+```
+
+The Data Factory managed identity has:
+
+```text
+Storage Blob Data Contributor
+```
+
+on the Storage Account.
+
+This avoids embedding Storage Account keys or other secrets in the pipeline.
+
+### ADF datasets
+
+Created:
+
+- `ds_adls_landing_csv`
+- `ds_adls_raw_csv`
+- `ds_adls_entities_json`
+
+The CSV datasets are parameterized using:
+
+```text
+file_name
+```
+
+and:
+
+```text
+@dataset().file_name
+```
+
+This lets one reusable dataset process all five source files instead of creating one dataset per entity.
+
+### Metadata-driven ingestion
+
+The metadata file contains one record per entity, including:
+
+```json
+{
+  "entity_name": "orders",
+  "source_file": "olist_orders_dataset.csv"
+}
+```
+
+The ADF pipeline uses:
+
+```text
+lookup_entities
+      ↓
+foreach_entity
+      ↓
+copy_entity_to_raw
+```
+
+`lookup_entities` reads all five metadata records with `First row only = False`.
+
+`foreach_entity` uses:
+
+```text
+@activity('lookup_entities').output.value
+```
+
+and the Copy activity uses:
+
+```text
+@item().source_file
+```
+
+for both source and sink filenames.
+
+The result is one reusable metadata-driven ingestion pattern for all five entities.
+
+### Successful ingestion validation
+
+The final Debug run completed successfully for all five Copy activity iterations.
+
+ADF reported successful file reads/writes, and all five Olist CSV files were verified in the `raw` ADLS container.
+
+The pipeline was then published with `Publish all`.
+
+### Azure troubleshooting completed
+
+During setup, the following issues were diagnosed and fixed:
+
+- `RequestDisallowedByPolicy` caused by subscription region restrictions
+- `EndpointUnsupportedAccountFeatures` during the first ADLS linked-service test
+- `ADLSGen2ForbiddenError` / `AuthorizationPermissionMismatch` because the Data Factory managed identity initially lacked data-plane permissions
+- an incorrect Copy Activity sink dataset that caused a successful run to write back to `landing` instead of `raw`
+
+The last issue demonstrated that a technically successful ADF activity can still be logically incorrect, so final data location must always be validated.
+
+### Current Azure ingestion architecture
+
+```text
+Local raw CSV files
+        ↓
+manual landing upload
+        ↓
+ADLS Gen2 landing
+        ↓
+ADF Lookup
+        ↓
+ADF ForEach
+        ↓
+parameterized Copy Activity
+        ↓
+ADLS Gen2 raw
+```
+
+The next Azure integration step is to extend orchestration beyond ingestion and connect the ADF flow to the Databricks processing/validation path.
+
+
 ## Current status
 
-The project is currently in **actual Week 3**, but progress is ahead of the six-week guide and has already covered the guide's Gold/incremental-processing objectives.
+The project is currently in **actual Week 3**, but progress is ahead of the six-week guide. In addition to completing the guide's Gold/incremental-processing objectives, the project has now started the Azure Data Factory + ADLS Gen2 integration phase.
 
 The project now has:
 
@@ -584,7 +775,16 @@ The project now has:
 - an automated Gold quality gate that fails the workflow on validation errors
 - a three-task Databricks Workflow: `silver_pipeline → gold_dimensions → gold_validation`
 - a successful end-to-end workflow run with all Gold validation checks passing
+- an Azure Data Factory resource and ADLS Gen2 Storage Account
+- a managed-identity ADF → ADLS connection using Azure RBAC
+- separate `landing` and `raw` ADLS containers
+- parameterized landing/raw CSV datasets
+- a metadata JSON dataset and five-entity configuration
+- a working `Lookup → ForEach → Copy` metadata-driven ingestion pipeline
+- successful ingestion of all five Olist CSV files into the ADLS `raw` area
+- documented troubleshooting for Azure Policy, ADLS endpoint features, RBAC permissions, and Copy sink configuration
+- a published ADF ingestion pipeline
 
-The project is still in **actual Week 3**, but the implementation is ahead of the six-week study guide and has already completed the guide's Gold dimensional-modelling, incremental-processing, SCD, idempotency, and automated validation objectives.
+The project is still in **actual Week 3**, but the implementation is ahead of the six-week study guide. Gold dimensional modelling, incremental processing, SCD, idempotency, and automated validation objectives are complete, and the Azure Data Factory / ADLS Gen2 integration phase is now underway.
 
-Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository.
+Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository. Azure ingestion files are stored in ADLS Gen2 `landing` and `raw` containers rather than committed to Git.
