@@ -996,6 +996,6 @@ The project now has:
 - synchronized local and Databricks copies of the Silver notebook
 - a successful end-to-end ADF → ADLS → Key Vault → Databricks workflow run
 
-The project is still in **actual Week 3**, but the implementation is ahead of the six-week study guide. Gold dimensional modelling, incremental processing, SCD, idempotency, and automated validation objectives are complete, and the Azure Data Factory / ADLS Gen2 ingestion and Databricks orchestration path is now working end to end.
+The project is still in **actual Week 4**, but the implementation is ahead of the six-week study guide. Gold dimensional modelling, incremental processing, SCD, idempotency, and automated validation objectives are complete, and the Azure Data Factory / ADLS Gen2 ingestion and Databricks orchestration path is now working end to end.
 
 Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository. Azure ingestion files are stored in ADLS Gen2 `landing` and `raw` containers rather than committed to Git.
