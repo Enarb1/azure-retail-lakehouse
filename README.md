@@ -2,7 +2,7 @@
 
 A six-week junior data engineering preparation project using the Olist Brazilian e-commerce dataset.
 
-The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, Azure Data Factory orchestration, Azure Data Lake Storage Gen2 ingestion, metadata-driven Lookup/ForEach processing, parameterized ADF datasets, managed-identity authentication with Azure RBAC, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, reusable Gold validation checks, workflow quality gates, joins, aggregations, window functions, Parquet storage, and sales analysis.
+The project currently demonstrates local PySpark development with Databricks Connect, managed Bronze/Silver/Gold Delta Lake pipelines, Azure Data Factory orchestration, Azure Data Lake Storage Gen2 ingestion, metadata-driven Lookup/ForEach processing, parameterized ADF datasets, managed-identity authentication with Azure RBAC, Azure Key Vault secret management, ADF Web activity integration with the Databricks Jobs REST API, data-quality validation, rejected-record handling, Spark execution analysis, Unity Catalog, Delta history and time travel, parameterized notebooks, Databricks Jobs/Workflows, dimensional modelling, deterministic surrogate keys, incremental Delta `MERGE` processing, idempotent reruns, Slowly Changing Dimension examples, reusable Gold validation checks, workflow quality gates, joins, aggregations, window functions, Parquet storage, and sales analysis.
 
 ## Current Architecture
 
@@ -63,6 +63,30 @@ copy_entity_to_raw
 
 `lookup_entities` reads `entities.json`, `foreach_entity` iterates over the five Olist entities, and one parameterized Copy activity moves each file from the ADLS `landing` container into the `raw` container.
 
+After ingestion, ADF securely retrieves a short-lived Databricks token from Azure Key Vault and uses a Web activity to call the Databricks Jobs REST API:
+
+```text
+lookup_entities
+      ↓
+foreach_entity
+      ↓
+copy_entity_to_raw
+      ↓
+get_databricks_token
+      ↓
+trigger_databricks_job
+      ↓
+Databricks Job
+      ↓
+silver_pipeline
+      ↓
+gold_dimensions
+      ↓
+gold_validation
+```
+
+This keeps ADF responsible for ingestion/orchestration while the existing Databricks Job remains responsible for Spark transformations and Gold validation.
+
 ## Technologies used
 
 - Python 3.12
@@ -74,6 +98,8 @@ copy_entity_to_raw
 - Azure Data Factory
 - Azure Data Lake Storage Gen2
 - Azure Managed Identity / RBAC
+- Azure Key Vault
+- Databricks Jobs REST API
 - Unity Catalog
 - Delta Lake
 - Parquet
@@ -109,7 +135,8 @@ azure_retail_lakehouse/
 │   ├── spark_shuffles_note.md
 │   ├── silver_layer_delta_history_databricks_jobs.md
 │   ├── gold_data_dictionary.md
-│   └── azure_adf_learning_notes_2026-08-25.md
+│   ├── azure_adf_learning_notes_2026-08-25.md
+│   └── azure_adf_databricks_progress_2026-08-26.md
 ├── config/
 │   └── adf_entities.json
 ├── notebooks/
@@ -495,7 +522,8 @@ The analysis currently includes:
 - Inspected Delta transaction history with `DESCRIBE HISTORY`
 - Demonstrated Delta table versioning
 - Demonstrated time travel with `VERSION AS OF`
-- Compared historical and current Silver orders using `exceptAll()`
+- Replaced a fragile hard-coded `VERSION AS OF 0` demo with a workflow-safe latest-version lookup after the old files exceeded Delta's deleted-file retention window
+- Compared the latest historical version and current Silver orders using `exceptAll()`
 - Demonstrated schema enforcement with an intentionally invalid append
 - Performed explicit schema evolution using `ALTER TABLE ADD COLUMNS`
 - Compared append and overwrite behaviour
@@ -745,12 +773,188 @@ parameterized Copy Activity
 ADLS Gen2 raw
 ```
 
-The next Azure integration step is to extend orchestration beyond ingestion and connect the ADF flow to the Databricks processing/validation path.
+ADF orchestration now extends beyond ingestion and successfully triggers the Databricks processing/validation path through the Databricks Jobs REST API.
+
+
+
+## Secure ADF → Databricks orchestration
+
+The Azure Data Factory pipeline now securely triggers the existing Databricks Job after raw-file ingestion.
+
+### Azure Key Vault
+
+A Key Vault was created using:
+
+```text
+Permission model: Azure role-based access control
+```
+
+The Databricks Personal Access Token is stored as:
+
+```text
+databricks-token
+```
+
+The token is short-lived and scoped only to the Databricks Jobs API.
+
+### Why Key Vault?
+
+The token is not hard-coded in:
+
+- ADF pipeline JSON
+- notebook code
+- source control
+- activity parameters
+
+Instead, ADF reads the token at runtime.
+
+### Key Vault RBAC
+
+The following roles are used:
+
+```text
+Current Azure user:
+Key Vault Secrets Officer
+
+ADF managed identity:
+Key Vault Secrets User
+```
+
+This follows least privilege: the user can manage secrets, while ADF only needs to read the secret value.
+
+### ADF token retrieval
+
+The Web activity:
+
+```text
+get_databricks_token
+```
+
+uses:
+
+```text
+Method: GET
+Authentication: System Assigned Managed Identity
+Resource: https://vault.azure.net
+```
+
+The activity retrieves the Databricks token securely from Key Vault.
+
+Secure output is enabled so the token is not exposed in normal activity logs.
+
+### Databricks Job trigger
+
+The Web activity:
+
+```text
+trigger_databricks_job
+```
+
+calls:
+
+```text
+POST /api/2.2/jobs/run-now
+```
+
+on the Databricks workspace.
+
+The request body references the existing Databricks Job, and the Authorization header is built dynamically from the Key Vault secret.
+
+Secure input is enabled so the Authorization header is not exposed unnecessarily.
+
+### Why the REST API integration?
+
+The project uses a Databricks Free Edition workspace hosted on:
+
+```text
+cloud.databricks.com
+```
+
+rather than a native Azure Databricks workspace on:
+
+```text
+azuredatabricks.net
+```
+
+Therefore, ADF uses a Web activity and the Databricks Jobs REST API instead of the native Azure Databricks notebook activity.
+
+This avoids creating another paid Databricks environment solely for orchestration.
+
+### Dependency and API troubleshooting
+
+During integration, two ADF issues were fixed:
+
+- the dependency between `foreach_entity` and `get_databricks_token` was not configured as an **Upon Success** dependency, so the Web activities were initially skipped
+- the first Databricks API request used a malformed workspace URL and failed until the URL was corrected
+
+These issues reinforced that ADF dependency conditions and HTTP request construction are part of the orchestration logic and must be validated explicitly.
+
+### Databricks time-travel failure discovered by orchestration
+
+ADF successfully triggered the Databricks Job, but the first downstream run failed in `silver_pipeline` with:
+
+```text
+DELTA_UNSUPPORTED_TIME_TRAVEL_BEYOND_DELETED_FILE_RETENTION_DURATION
+```
+
+The Silver notebook still contained a demonstration query using:
+
+```sql
+VERSION AS OF 0
+```
+
+The Delta table's deleted-file retention was:
+
+```text
+168 HOURS
+```
+
+so the old files required to reconstruct version 0 were no longer available.
+
+The notebook was updated to find the latest Delta version dynamically:
+
+```python
+history = spark.sql(f"""
+    DESCRIBE HISTORY {catalog}.silver.orders
+""")
+
+latest_version = history.agg(F.max("version")).first()[0]
+```
+
+and then use that version for the safe time-travel demonstration and `exceptAll()` comparison.
+
+This is an important production lesson: exploratory/demo code must be reviewed before it becomes part of an automated workflow.
+
+### End-to-end success
+
+After correcting the Silver notebook and synchronizing the same fix to the local PyCharm copy, the complete Azure + Databricks flow succeeded:
+
+```text
+ADF Lookup
+      ↓
+ADF ForEach
+      ↓
+5 × Copy Activity
+      ↓
+ADLS raw
+      ↓
+Key Vault token retrieval
+      ↓
+Databricks Jobs API trigger
+      ↓
+silver_pipeline
+      ↓
+gold_dimensions
+      ↓
+gold_validation
+```
+
+The final Databricks Job completed successfully and the Gold validation quality gate passed.
 
 
 ## Current status
 
-The project is currently in **actual Week 3**, but progress is ahead of the six-week guide. In addition to completing the guide's Gold/incremental-processing objectives, the project has now started the Azure Data Factory + ADLS Gen2 integration phase.
+The project is currently in **actual Week 3**, but progress is ahead of the six-week guide. The Gold/incremental-processing objectives are complete, and the Azure Data Factory + ADLS Gen2 integration now includes secure downstream Databricks orchestration.
 
 The project now has:
 
@@ -784,7 +988,14 @@ The project now has:
 - successful ingestion of all five Olist CSV files into the ADLS `raw` area
 - documented troubleshooting for Azure Policy, ADLS endpoint features, RBAC permissions, and Copy sink configuration
 - a published ADF ingestion pipeline
+- an Azure Key Vault for secure Databricks token storage
+- least-privilege Key Vault RBAC for the current user and ADF managed identity
+- secure ADF Web activity token retrieval using System Assigned Managed Identity
+- ADF integration with the Databricks Jobs REST API
+- a corrected workflow-safe Delta time-travel demonstration in `10_delta_silver.ipynb`
+- synchronized local and Databricks copies of the Silver notebook
+- a successful end-to-end ADF → ADLS → Key Vault → Databricks workflow run
 
-The project is still in **actual Week 3**, but the implementation is ahead of the six-week study guide. Gold dimensional modelling, incremental processing, SCD, idempotency, and automated validation objectives are complete, and the Azure Data Factory / ADLS Gen2 integration phase is now underway.
+The project is still in **actual Week 3**, but the implementation is ahead of the six-week study guide. Gold dimensional modelling, incremental processing, SCD, idempotency, and automated validation objectives are complete, and the Azure Data Factory / ADLS Gen2 ingestion and Databricks orchestration path is now working end to end.
 
 Raw and generated data files are excluded from Git. Bronze, Silver, and Gold Delta tables are stored in Databricks/Unity Catalog rather than committed to the repository. Azure ingestion files are stored in ADLS Gen2 `landing` and `raw` containers rather than committed to Git.
